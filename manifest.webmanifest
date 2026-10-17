@@ -1,0 +1,11 @@
+{
+  "name": "午夜德扑 Midnight Hold'em",
+  "short_name": "午夜德扑",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#060A08",
+  "theme_color": "#060A08",
+  "icons": [
+    { "src": "icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
