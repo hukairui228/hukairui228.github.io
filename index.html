@@ -837,9 +837,16 @@ body.paused .act{filter:saturate(.35)}
    ============================================================ */
 html{-webkit-text-size-adjust:100%}
 #btnSheet,.sheet-backdrop,.sheet-head{display:none}
+.coachmini{display:none}
 
 @media (max-width:900px){
   :root{--cw:46px;--ch:64px}
+  /* 手机上教练在抽屉里看不到：开着教练模式时，在下注按钮上方放一条简版 */
+  .coachmini.show{display:flex;gap:8px;align-items:flex-start;width:100%;box-sizing:border-box;margin:2px 0 6px;padding:7px 10px;
+    border:1px solid var(--line);border-radius:10px;background:rgba(201,164,76,.07);font-size:12px;line-height:1.5;color:var(--ivory-2);text-align:left;cursor:pointer}
+  .coachmini b{flex:none;color:var(--brass-hi);font-weight:500;letter-spacing:.06em}
+  .coachmini span{flex:1;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;white-space:pre-line}
+  .coachmini.dim span{color:var(--ivory-dim)}
   body{
     position:fixed;inset:0;overscroll-behavior:none;
     touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;
@@ -1033,6 +1040,8 @@ html{-webkit-text-size-adjust:100%}
 
 /* ---------- 横屏手机：单行操作栏，牌桌占满剩余高度 ---------- */
 @media (max-width:900px) and (orientation:landscape) and (max-height:560px){
+  .coachmini span{-webkit-line-clamp:2}
+  .coachmini.show{margin:0 0 4px;padding:4px 8px;font-size:11px}
   .topbar{flex-wrap:nowrap;padding:calc(4px + env(safe-area-inset-top)) 12px 4px;gap:12px}
   .brand-text{display:none}
   .tools{margin-left:auto;width:auto;overflow:visible}
@@ -1150,6 +1159,7 @@ html{-webkit-text-size-adjust:100%}
         <span class="stars" id="myStars"></span>
       </div>
     </div>
+    <button class="coachmini" id="coachMini" title="看完整教练"><b>教练</b><span id="coachMiniText"></span></button>
     <div class="controls">
       <div class="turnchip" id="turnChip"><span id="turnWho">轮到你</span> · <span class="cd" id="turnCd">30</span>s</div>
       <div class="waitbar" id="waitBar"><i id="waitFill"></i></div>
@@ -2129,6 +2139,27 @@ function buildTable(){
 /* ============================================================
    7. 渲染
    ============================================================ */
+/* 把教练面板的当前结论抄到手机的简版条里：AI 教练在说话就抄它，否则抄本地建议 */
+function syncCoachMini(){
+  const box=document.getElementById('coachMini'), t=document.getElementById('coachMiniText');
+  if(!box) return;
+  const ai=document.getElementById('aiCoach'), at=document.getElementById('aiCoachText'), h=document.getElementById('hint');
+  let txt='', dim=false;
+  if(ai&&ai.style.display!=='none'&&at&&at.textContent.trim()){ txt=at.textContent.trim(); dim=at.classList.contains('dim'); }
+  if((!txt||dim)&&h&&h.style.display!=='none'&&h.textContent.trim()){
+    /* 本地建议很长：只取结论、第一条理由和「下次记住」 */
+    const rec=h.querySelector('.rec b'), li=h.querySelector('li'), ls=h.querySelector('.lesson');
+    if(rec){
+      txt=rec.textContent.trim()+(li?' · '+li.textContent.trim():'');
+      if(ls) txt+='\n下次记住：'+ls.textContent.replace(/^下次记住/,'').trim();
+    }else txt=h.textContent.trim();
+    dim=false;
+  }
+  const on=!!G.coach&&!!txt;
+  box.classList.toggle('show',on);
+  box.classList.toggle('dim',dim);
+  if(on&&t.textContent!==txt) t.textContent=txt;
+}
 function render(){
   renderLocal();
   /* 联机时房主是唯一权威：每次画面变化都把各家视角推给中继，
@@ -5979,6 +6010,13 @@ function boot(){
     else openTrain('drill');
   };
   document.getElementById('btnBoard').onclick=openBoard;
+  document.getElementById('coachMini').onclick=function(){ document.body.classList.add('sheet-open'); };
+  if(typeof MutationObserver!=='undefined'){
+    const mo=new MutationObserver(syncCoachMini);
+    ['aiCoach','aiCoachText','hint'].forEach(function(id){
+      mo.observe(document.getElementById(id),{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['style','class']});
+    });
+  }
   const bc=document.getElementById('btnCoach');
   bc.onclick=function(){
     G.coach=!G.coach;
@@ -5987,6 +6025,7 @@ function boot(){
       ?'已开启：实时胜率（按对手可能的牌估算）、明确建议和对手解读'+(aiReady('coach')&&AIC.coach?'，AI 教练（'+provLabel(roleProv('coach'))+'）也已就位':'')+'。'
       :'已关闭。'),'tip');
     render();
+    syncCoachMini();
   };
   const bs=document.getElementById('btnSound');
   bs.classList.add('on');
