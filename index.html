@@ -3277,7 +3277,9 @@ async function startHand(){
   }catch(e){
     if(e!==ABORT) console.error(e);
   }
-  if(token!==G.token){ G.busy=false; return; }
+  /* 被重开 / 换人数 / 结账打断的旧牌局：新牌局已经接管了 busy，旧的不能再把它清掉，
+     否则会再起一条牌局循环，和新的抢着推进（表现为某个电脑一直「想」、牌局卡住） */
+  if(token!==G.token) return;
   G.busy=false;
   startHand();
 }
@@ -4770,7 +4772,7 @@ function openAISettings(){
     seatCountSave(n);
     if(NET.online) return;
     if(gamePaused) setPaused(false);
-    if(G.busy){ G.pending=null; G.waiting=false; G.busy=false; }
+    if(G.busy){ G.pending=null; G.waiting=false; G.busy=false; G.token++; }
     G.phase='idle';
     initGame();
     log('<small>重开</small>换成 '+n+' 人桌。','tip');
@@ -5528,12 +5530,55 @@ function normServer(s){
   if(!/^https?:\/\//i.test(s)) s='http://'+s;
   return s;
 }
-function saveSession(){
-  try{ localStorage.setItem(SESS_KEY,JSON.stringify({pid:NET.pid,token:NET.token,roomId:NET.roomId,nick:NET.nick,server:NET.server})); }catch(e){}
+/* 记住「我在哪个房间的哪个座位」，刷新或断线后能回原座。
+   同一个浏览器开两个标签页时 localStorage 是共用的：第二个标签页不能拿第一个的座位去「重连」，
+   否则两个标签页会变成同一个人、都当房主、各发各的牌。
+   做法：本标签页自己的座位存 sessionStorage（刷新不丢）；共用的那份只在「没有别的标签页正坐着」时才复用 ——
+   用 BroadcastChannel 问一声，还开着的标签页会回答，关掉的不会。 */
+const TAB_ID=(function(){
+  try{
+    let t=sessionStorage.getItem('mh_tab');
+    if(!t){ t=Math.random().toString(36).slice(2,10); sessionStorage.setItem('mh_tab',t); }
+    return t;
+  }catch(e){ return Math.random().toString(36).slice(2,10); }
+})();
+const TAB_BC=(function(){ try{ return typeof BroadcastChannel==='function'?new BroadcastChannel('mh_tabs'):null; }catch(e){ return null; } })();
+if(TAB_BC) TAB_BC.onmessage=function(e){
+  const m=e.data||{};
+  if(m.q==='who'&&m.pid&&NET.pid===m.pid&&NET.roomId) TAB_BC.postMessage({a:'mine',pid:m.pid,tab:TAB_ID});
+};
+function seatInUse(pid){
+  if(!TAB_BC||!pid) return Promise.resolve(false);
+  return new Promise(function(res){
+    let done=false;
+    const h=function(e){ const m=e.data||{}; if(m.a==='mine'&&m.pid===pid&&m.tab!==TAB_ID) fin(true); };
+    const fin=function(v){ if(done) return; done=true; TAB_BC.removeEventListener('message',h); res(v); };
+    TAB_BC.addEventListener('message',h);
+    TAB_BC.postMessage({q:'who',pid:pid});
+    setTimeout(function(){ fin(false); },350);
+  });
 }
-function clearSession(){ try{ localStorage.removeItem(SESS_KEY); }catch(e){} }
-function loadSession(){
-  try{ return JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){ return null; }
+function saveSession(){
+  const v=JSON.stringify({pid:NET.pid,token:NET.token,roomId:NET.roomId,nick:NET.nick,server:NET.server,tab:TAB_ID});
+  try{ sessionStorage.setItem(SESS_KEY,v); }catch(e){}   /* 本标签页自己的那份：刷新后靠它回原座 */
+  try{ localStorage.setItem(SESS_KEY,v); }catch(e){}     /* 共用的那份：关掉标签页再打开时用 */
+}
+function rawSession(){ try{ return JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){ return null; } }
+function ownSession(){ try{ return JSON.parse(sessionStorage.getItem(SESS_KEY)||'null'); }catch(e){ return null; } }
+function clearSession(){
+  try{ sessionStorage.removeItem(SESS_KEY); }catch(e){}
+  const s=rawSession();
+  if(s&&s.tab&&s.tab!==TAB_ID) return;     /* 那是别的标签页的座位，别动 */
+  try{ localStorage.removeItem(SESS_KEY); }catch(e){}
+}
+/* 能拿来「回原座」的会话：自己标签页的优先；共用的那份要先确认没有别的标签页正坐着 */
+async function loadSession(){
+  const own=ownSession();
+  if(own) return own;
+  const s=rawSession();
+  if(!s) return null;
+  if(await seatInUse(s.pid)) return null;
+  return s;
 }
 function saveNick(n){ try{ localStorage.setItem(NICK_KEY,n); }catch(e){} }
 function loadNick(){ try{ return localStorage.getItem(NICK_KEY)||''; }catch(e){ return ''; } }
@@ -5802,9 +5847,10 @@ async function netJoin(roomId){
   if(code.length<4){ lobbyErr('房号是 5 位字母数字，问一下房主'); return; }
   NET.server=normServer(lobbySrvVal());
   NET.nick=nick; NET.busy=true; lobbyErr('正在加入 '+code+'…',true);
-  const sess=loadSession();
+  const sess=await loadSession();
   const body={roomId:code,nick:nick};
-  if(sess&&sess.roomId===code&&sess.pid&&sess.token){ body.pid=sess.pid; body.token=sess.token; }
+  /* 回原座：用这个座位当初的昵称（昵称存档是各标签页共用的，可能被别的标签页改掉） */
+  if(sess&&sess.roomId===code&&sess.pid&&sess.token){ body.pid=sess.pid; body.token=sess.token; if(sess.nick){ body.nick=sess.nick; NET.nick=sess.nick; } }
   const r=await api('/api/join',body,12000);
   NET.busy=false;
   if(!r.ok){ lobbyErr(netErrText(r)); return; }
@@ -6149,7 +6195,7 @@ function boot(){
       return;
     }
     if(NET.online&&!NET.isHost){ toast('联机模式由房主控制重开'); return; }
-    if(G.busy){ G.pending=null; G.waiting=false; G.busy=false; }
+    if(G.busy){ G.pending=null; G.waiting=false; G.busy=false; G.token++; }
     G.phase='idle';
     initGame();
     log('<small>重开</small>牌局已重置。','tip');
