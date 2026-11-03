@@ -5513,8 +5513,13 @@ function toast(text){
 /* 自带部署好的中继：App（file:// 打开）默认连它，点一下就能和外地朋友开局。
    想在自己电脑上开桌（局域网 / 不联网）就在大厅的进阶里改成 http://localhost:3000 */
 const PUBLIC_RELAY='https://midnight-holdem.app.workbuddy.host';
+/* 页面本身是不是由联机服务器发出来的：github.io 这类静态托管只有网页、没有 /api，要改连公共中继 */
+function pageServesRelay(){
+  if(location.protocol!=='http:'&&location.protocol!=='https:') return false;
+  return !/(^|\.)(github\.io|netlify\.app|pages\.dev|vercel\.app|claude\.ai|claudeusercontent\.com)$/i.test(location.hostname);
+}
 function defaultServer(){
-  if(location.protocol==='http:'||location.protocol==='https:') return location.origin;
+  if(pageServesRelay()) return location.origin;
   try{ return localStorage.getItem(SRV_KEY)||PUBLIC_RELAY; }catch(e){ return PUBLIC_RELAY; }
 }
 function normServer(s){
